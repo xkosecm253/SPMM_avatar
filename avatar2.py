@@ -27,7 +27,14 @@ import pygame
 
 # ----------------------------- Konštanty -----------------------------
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), 'assets')
-WINDOW_W, WINDOW_H = 1100, 720
+
+
+#WINDOW_W, WINDOW_H = 1100, 720 
+#stare nastavenia okna
+
+WINDOW_W = 480
+WINDOW_H = 740
+
 BG = (16,18,22); PANEL = (26,28,34); CARD = (32,35,42); TXT=(230,230,235); MUTED=(165,170,180); ACC=(120,180,255)
 FONT_NAME = 'freesansbold.ttf'
 
@@ -48,6 +55,8 @@ ESPEAK_WPM = 170
 # Layout
 RIGHT_W = 420; LEFT_W = WINDOW_W - RIGHT_W
 PAD = 16; GAP = 10; CTRL_H = 44; SMALL_H = 18
+
+
 
 # ----------------------------- Utility -----------------------------
 
@@ -259,7 +268,7 @@ class App:
     def draw_layout(self):
         self.screen.fill(BG)
         left=pygame.Rect(0,0,LEFT_W,WINDOW_H); right=pygame.Rect(LEFT_W,0,RIGHT_W,WINDOW_H)
-        pygame.draw.rect(self.screen,(245,245,248),left); pygame.draw.rect(self.screen,PANEL,right)
+        pygame.draw.rect(self.screen,(26,28,34),left); pygame.draw.rect(self.screen,PANEL,right)
         self.screen.blit(self.font_t.render('Hovoriaci avatar – offline',True,TXT),(LEFT_W+PAD,PAD))
         self.screen.blit(self.font_s.render('pygame + eSpeak NG',True,MUTED),(LEFT_W+PAD,PAD+22))
         pygame.draw.line(self.screen,(50,50,58),(LEFT_W,0),(LEFT_W,WINDOW_H),1)
@@ -271,6 +280,7 @@ class App:
             if a<=p<=b: return e
         return self.base_emo
 
+    """""
     def run(self):
         clock=pygame.time.Clock(); running=True
         while running:
@@ -305,6 +315,97 @@ class App:
             self.draw_meter(rms)
             pygame.display.flip(); clock.tick(60)
         self.player.stop(); pygame.quit()
+    """""
+
+
+    def run(self):
+        clock = pygame.time.Clock()
+        running = True
+
+        # fixná šírka layoutu (podľa textboxu)
+        LAYOUT_W = 400
+        LAYOUT_X = (WINDOW_W - LAYOUT_W) // 2
+
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN and self.box.active:
+                    self.on_speak()
+                self.box.handle(event)
+                self.btn_speak.handle(event)
+                self.btn_stop.handle(event)
+                self.tgl_lang.handle(event)
+
+            # === Pozadie ===
+            self.screen.fill(BG)
+
+            # === Avatar ===
+            avatar_h = 420
+            avatar_rect = pygame.Rect(LAYOUT_X, 40, LAYOUT_W, avatar_h)
+            pygame.draw.rect(self.screen, CARD, avatar_rect, border_radius=12)
+            pygame.draw.rect(self.screen, (70, 70, 80), avatar_rect, width=2, border_radius=12)
+
+            rms = self.player.current_rms()
+            if rms < RMS_THR1:
+                state = "closed"
+            elif rms < RMS_THR2:
+                state = "teeth"
+            elif rms < RMS_THR3:
+                state = "open"
+            else:
+                state = "o"
+            emo = self.current_emotion()
+            self.avatar.set_emotion(emo)
+            if emo == "Happy" and rms < RMS_THR2:
+                state = "smile"
+            self.avatar.set_mouth(state)
+
+            # vykresli avatar
+            inner = avatar_rect.inflate(-16, -16)
+            self.avatar.draw_scaled(self.screen, inner)
+
+            # === UI prvky ===
+            spacing = 20
+            current_y = avatar_rect.bottom + spacing
+
+            # Textové pole
+            self.box.rect = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, 44)
+            self.box.draw(self.screen, self.font)
+            current_y += 44 + spacing
+
+            # Emócia (malý badge)
+            badge = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, 26)
+            pygame.draw.rect(self.screen, CARD, badge, border_radius=8)
+            pygame.draw.rect(self.screen, (70, 70, 80), badge, width=1, border_radius=8)
+            text = self.font_s.render(f"Emócia: {emo}", True, TXT)
+            text_x = badge.centerx - text.get_width() // 2
+            self.screen.blit(text, (text_x, badge.y + 4))
+            current_y += badge.height + spacing
+
+            # Tlačidlá (vedľa seba, ale celková šírka = textbox)
+            btn_h = 44
+            btn_gap = 12
+            btn_w = (LAYOUT_W - btn_gap) // 2
+            self.btn_speak.rect = pygame.Rect(LAYOUT_X, current_y, btn_w, btn_h)
+            self.btn_stop.rect = pygame.Rect(LAYOUT_X + btn_w + btn_gap, current_y, btn_w, btn_h)
+            self.btn_speak.draw(self.screen, self.font)
+            self.btn_stop.draw(self.screen, self.font)
+            current_y += btn_h + spacing
+
+            # Prepínač jazyka
+            toggle_h = 50
+            self.tgl_lang.rect = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, toggle_h)
+            self.tgl_lang.draw(self.screen, self.font, self.font_s)
+
+            # === Zvukový meter ===
+            self.draw_meter(rms)
+
+            pygame.display.flip()
+            clock.tick(60)
+        self.player.stop()
+        pygame.quit()
+
 
 if __name__=='__main__':
     try:
