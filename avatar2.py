@@ -24,8 +24,12 @@ import pyperclip  # <-- pre Ctrl+C/V/X
 ASSETS_DIR = os.path.join(os.path.dirname(__file__), 'assets')
 CONFIG_PATH = 'config.json'  # pre ukladanie témy
 
-WINDOW_W = 480
-WINDOW_H = 740
+#WINDOW_W = 480
+#WINDOW_H = 740
+WINDOW_W = 960          # 2× širšie okno
+WINDOW_H = 620          # nižšie, UI vpravo
+
+
 
 # Predvolené farby (tmavý režim)
 BG = (16, 18, 22);
@@ -51,8 +55,8 @@ ESPEAK_VOICE_EN = 'en+f3'
 ESPEAK_WPM = 170
 
 # Layout
-RIGHT_W = 420;
-LEFT_W = WINDOW_W - RIGHT_W
+LEFT_W = 480            # ľavý panel = avatar
+RIGHT_W = 480           # pravý panel = UI
 PAD = 16;
 GAP = 10;
 CTRL_H = 44;
@@ -290,8 +294,29 @@ class TextBox:
         self.caret = len(text)
         self.select_start = None  # <--- ZMENENÉ: None, nie caret
         self.scroll_x = 0
+        self.scroll_y = 0              # <--- nové: vertikálny posun
         self._blink_t = time.time()
         self._blink_on = True
+
+        # nové pre viacriadkový režim
+        self.line_height = 26
+        self.max_lines = 3
+        self.padding = 10
+
+    def _wrap_text(self, font, width):
+        """Rozdelí text na riadky podľa šírky."""
+        words = self.text.split(' ')
+        lines, line = [], ''
+        for w in words:
+            test_line = (line + ' ' + w).strip()
+            if font.size(test_line)[0] > width and line:
+                lines.append(line)
+                line = w
+            else:
+                line = test_line
+        if line:
+            lines.append(line)
+        return lines
 
     def _get_selection(self):
         if self.select_start is None or self.select_start == self.caret:
@@ -328,7 +353,7 @@ class TextBox:
         )
         pygame.draw.rect(surf, (100, 150, 255, 100), sel_rect, border_radius=2)
 
-    def draw(self, surf, font, placeholder='Napíš text…'):
+    """def draw(self, surf, font, placeholder='Napíš text…'):
         pygame.draw.rect(surf, CARD, self.rect, border_radius=8)
         pygame.draw.rect(surf, ACC if self.active else (70, 70, 80),
                          self.rect, width=2, border_radius=8)
@@ -356,6 +381,48 @@ class TextBox:
                 cy1 = box.y
                 cy2 = box.y + font.get_height()
                 pygame.draw.line(surf, ACC, (cx, cy1), (cx, cy2), 2)
+    """
+
+    def draw(self, surf, font, placeholder='Napíš text…'):
+        pygame.draw.rect(surf, CARD, self.rect, border_radius=8)
+        pygame.draw.rect(surf, ACC if self.active else (70, 70, 80),
+                         self.rect, width=2, border_radius=8)
+
+        pad = self.padding
+        box = pygame.Rect(self.rect.x + pad, self.rect.y + pad,
+                          self.rect.width - 2 * pad, self.rect.height - 2 * pad)
+
+        # vykreslenie textu s automatickým zalomením
+        text_lines = self._wrap_text(font, box.width)
+        visible_lines = text_lines[int(self.scroll_y / self.line_height):]
+        visible_lines = visible_lines[:self.max_lines]
+
+        color = TXT if self.text else MUTED
+        if not self.text:
+            text_lines = [placeholder]
+
+        surf.set_clip(box)
+        y = box.y - (self.scroll_y % self.line_height)
+        for line in visible_lines:
+            text_surf = font.render(line, True, color)
+            surf.blit(text_surf, (box.x, y))
+            y += self.line_height
+        surf.set_clip(None)
+
+        # automatická výška
+        total_h = min(len(text_lines), self.max_lines) * self.line_height + 2 * pad
+        self.rect.height = total_h
+
+        # caret (kurzor)
+        if self.active:
+            now = time.time()
+            if now - self._blink_t > 0.5:
+                self._blink_on = not self._blink_on
+                self._blink_t = now
+            if self._blink_on:
+                caret_line = font.size(self.text[:self.caret])[0]
+                pygame.draw.line(surf, ACC, (box.x + caret_line, box.y + len(visible_lines)*self.line_height - 20),
+                                 (box.x + caret_line, box.y + len(visible_lines)*self.line_height - 2), 2)
 
     def handle(self, event, font=None):
         if event.type == pygame.MOUSEBUTTONDOWN:
@@ -509,6 +576,12 @@ class TextBox:
         self._blink_t = time.time()
         self._blink_on = True
 
+         # Scroll myšou
+        if event.type == pygame.MOUSEWHEEL and self.active:
+            total_lines = max(1, len(self._wrap_text(font, self.rect.width - 2*self.padding)))
+            max_scroll = max(0, (total_lines - self.max_lines) * self.line_height)
+            self.scroll_y = min(max(0, self.scroll_y - event.y * self.line_height), max_scroll)
+
 # ----------------------------- Avatar -----------------------------
 class Avatar:
     def __init__(self):
@@ -630,7 +703,7 @@ class SpeechPlayer:
 class App:
     def __init__(self):
         pygame.init()
-        pygame.key.set_repeat(400, 30)  # pre držanie backspace
+        pygame.key.set_repeat(400, 30)
         pygame.display.set_caption('Hovoriaci avatar – offline')
         self.screen = pygame.display.set_mode((WINDOW_W, WINDOW_H))
         self.font = pygame.font.Font(FONT_NAME, 20)
@@ -639,25 +712,45 @@ class App:
         self.avatar = Avatar()
         self.player = SpeechPlayer()
 
-        rx = LEFT_W + PAD
-        y = PAD + 48
-        self.box = TextBox((rx, y, RIGHT_W - 2 * PAD, CTRL_H))
-        y += CTRL_H + GAP
-        half = (RIGHT_W - 3 * PAD) // 2
-        self.btn_speak = Button((rx, y, half, CTRL_H), 'Speak', self.on_speak)
-        self.btn_stop = Button((rx + half + PAD, y, half, CTRL_H), 'Stop', self.on_stop)
-        y += CTRL_H + GAP
-        self.tgl_lang = Dropdown(pygame.Rect(rx, y, RIGHT_W - 2 * PAD, CTRL_H + SMALL_H), ['SK', 'EN'], 0, 'Jazyk')
-        y += CTRL_H + SMALL_H + GAP
-        self.emotion_windows: List[Tuple[float, float, str]] = []
+        # === Rozloženie panelov ===
+        # Ľavý panel – avatar
+        self.left_rect = pygame.Rect(0, 0, LEFT_W, WINDOW_H)
+
+        # Pravý panel – ovládanie
+        self.right_rect = pygame.Rect(LEFT_W, 0, RIGHT_W, WINDOW_H)
+
+        # === Prvky na pravej strane ===
+        pad = PAD
+        y = pad + 10
+
+        # Prepínač témy (vpravo hore)
+        self.btn_theme = Button(
+            pygame.Rect(LEFT_W + RIGHT_W - 100 - pad, y, 100, 30),
+            'Svetlý' if CONFIG['theme'] == 'dark' else 'Tmavý',
+            self.toggle_theme
+        )
+        y += 50
+
+        # Textové pole so scrollom
+        self.box = TextBox((LEFT_W + pad, y, RIGHT_W - 2 * pad, 120))
+        y += 120 + 20
+
+        # Tlačidlá Speak / Stop
+        half = (RIGHT_W - 3 * pad) // 2
+        self.btn_speak = Button((LEFT_W + pad, y, half, CTRL_H), 'Speak', self.on_speak)
+        self.btn_stop = Button((LEFT_W + pad + half + pad, y, half, CTRL_H), 'Stop', self.on_stop)
+        y += CTRL_H + 20
+
+        # Dropdown – jazyk
+        self.tgl_lang = Dropdown(
+            pygame.Rect(LEFT_W + pad, y, RIGHT_W - 2 * pad, CTRL_H + SMALL_H),
+            ['SK', 'EN'], 0, 'Jazyk'
+        )
+
+        # Ostatné
+        self.emotion_windows = []
         self.base_emo = 'Neutral'
-
-        # --- Pridané: pre rolovanie textu ---
         self.words = []
-
-        # Tlačidlo pre prepínanie témy (vpravo hore)
-        self.btn_theme = Button(pygame.Rect(WINDOW_W - 100 - PAD, PAD, 100, 30),
-                                'Svetlý' if CONFIG['theme'] == 'dark' else 'Tmavý', self.toggle_theme)
 
     def toggle_theme(self):
         # Prepni tému a ulož
@@ -715,35 +808,38 @@ class App:
     def run(self):
         clock = pygame.time.Clock()
         running = True
-        dt = 0.0  # <-- Pridané: pre idle animáciu
+        dt = 0.0  # pre idle animáciu
 
-        # fixná šírka layoutu (podľa textboxu)
-        LAYOUT_W = 400
-        LAYOUT_X = (WINDOW_W - LAYOUT_W) // 2
+        # Fixná šírka pravej strany (UI)
+        RIGHT_W = 400
+        RIGHT_X = WINDOW_W - RIGHT_W - 20  # pravá strana s marginom
+        LEFT_X = 20  # ľavá strana pre avatar
+        LEFT_W = RIGHT_X - LEFT_X  # zvyšná šírka pre avatar
 
         while running:
-            dt = clock.tick(60) / 1000.0  # <-- Pridané: vypočítaj dt pre animácie
+            dt = clock.tick(60) / 1000.0
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     running = False
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN and self.box.active:
-                    self.on_speak()  # Ak stlačí Enter, spustí reč
-                self.box.handle(event, self.font)  # Spracovanie vstupu do textového poľa
+                    self.on_speak()
+                self.box.handle(event, self.font)
                 self.btn_speak.handle(event)
                 self.btn_stop.handle(event)
                 self.tgl_lang.handle(event)
-                self.btn_theme.handle(event)  # Handle pre tlačidlo témy
+                self.btn_theme.handle(event)
 
             # === Pozadie ===
             self.screen.fill(BG)
 
-            # === Avatar ===
+            # === ĽAVÝ PANEL – AVATAR ===
             avatar_h = 420
-            avatar_rect = pygame.Rect(LAYOUT_X, 40, LAYOUT_W, avatar_h)
+            avatar_rect = pygame.Rect(LEFT_X, 40, LEFT_W, avatar_h)
             pygame.draw.rect(self.screen, CARD, avatar_rect, border_radius=12)
             pygame.draw.rect(self.screen, (70, 70, 80), avatar_rect, width=2, border_radius=12)
 
             rms = self.player.current_rms()
+            state = "closed"
             if rms < RMS_THR1:
                 state = "closed"
             elif rms < RMS_THR2:
@@ -758,87 +854,50 @@ class App:
                 state = "smile"
             self.avatar.set_mouth(state)
 
-            # --- Pridané: idle animácia ---
             self.avatar.update_idle(dt)
 
-            # --- Postupný návrat na Neutral po skončení reči ---
-            if not self.player.playing and hasattr(self, 'last_emotion') and self.last_emotion != 'Neutral':
-                if not hasattr(self, 'neutral_timer'):
-                    self.neutral_timer = time.time()
-                elif time.time() - self.neutral_timer > 2.0:
-                    self.last_emotion = 'Neutral'
-                    del self.neutral_timer
-            else:
-                if hasattr(self, 'neutral_timer'):
-                    del self.neutral_timer
-
-            # vykresli avatar
             inner = avatar_rect.inflate(-16, -16)
             self.avatar.draw_scaled(self.screen, inner)
 
-            # --- Pridané: rolovanie textu pod avatarom ---
-            if self.player.playing and self.words:
-                progress = self.player.progress()
-                current_word_idx = int(progress * len(self.words))
-                current_word_idx = min(current_word_idx, len(self.words) - 1)
+            # === PRAVÝ PANEL – UI ===
+            pygame.draw.rect(self.screen, PANEL, pygame.Rect(RIGHT_X, 40, RIGHT_W, WINDOW_H - 80))
 
-                # Zobraz text pod avatarom
-                text_y = avatar_rect.bottom - 40  # pozícia pod avatarom
-                x = LAYOUT_X + 20  # odsadenie
-                max_width = LAYOUT_W - 40
-                current_y = text_y
-
-                for i, word in enumerate(self.words):
-                    color = ACC if i == current_word_idx else TXT
-                    word_surf = self.font_s.render(word + " ", True, color)
-                    if x + word_surf.get_width() > LAYOUT_X + max_width:
-                        x = LAYOUT_X + 20
-                        current_y += 20  # nový riadok
-                    self.screen.blit(word_surf, (x, current_y))
-                    x += word_surf.get_width()
-
-            # === UI prvky ===
             spacing = 20
-            current_y = avatar_rect.bottom + spacing
+            current_y = 60  # začiatok zhora pre UI prvky
 
-            # Textové pole
-            self.box.rect = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, 44)
-            self.box.draw(self.screen, self.font)  # Vykreslenie textového poľa
-            current_y += 44 + spacing
+            # Prepínač témy hore
+            self.btn_theme.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, 36)
+            self.btn_theme.draw(self.screen, self.font_s)
+            current_y += 36 + spacing
 
-            # Emócia (malý badge)
-            badge = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, 26)
-            pygame.draw.rect(self.screen, CARD, badge, border_radius=8)
-            pygame.draw.rect(self.screen, (70, 70, 80), badge, width=1, border_radius=8)
-            text = self.font_s.render(f"Emócia: {emo}", True, TXT)
-            text_x = badge.centerx - text.get_width() // 2
-            self.screen.blit(text, (text_x, badge.y + 4))
-            current_y += badge.height + spacing
+            # Textové pole so scrollom
+            self.box.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, 150)
+            self.box.draw(self.screen, self.font)
+            current_y += 150 + spacing
 
-            # Tlačidlá (vedľa seba, ale celková šírka = textbox)
+            # Tlačidlá Speak / Stop vedľa seba
             btn_h = 44
             btn_gap = 12
-            btn_w = (LAYOUT_W - btn_gap) // 2
-            self.btn_speak.rect = pygame.Rect(LAYOUT_X, current_y, btn_w, btn_h)
-            self.btn_stop.rect = pygame.Rect(LAYOUT_X + btn_w + btn_gap, current_y, btn_w, btn_h)
+            btn_w = (RIGHT_W - 20 - btn_gap) // 2
+            self.btn_speak.rect = pygame.Rect(RIGHT_X + 10, current_y, btn_w, btn_h)
+            self.btn_stop.rect = pygame.Rect(RIGHT_X + 10 + btn_w + btn_gap, current_y, btn_w, btn_h)
             self.btn_speak.draw(self.screen, self.font)
             self.btn_stop.draw(self.screen, self.font)
             current_y += btn_h + spacing
 
             # Prepínač jazyka
             toggle_h = 50
-            self.tgl_lang.rect = pygame.Rect(LAYOUT_X, current_y, LAYOUT_W, toggle_h)
+            self.tgl_lang.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, toggle_h)
             self.tgl_lang.draw(self.screen, self.font, self.font_s)
 
-            # Vykreslenie tlačidla pre tému
-            self.btn_theme.draw(self.screen, self.font_s)
-
-            # === Zvukový meter ===
+            # Meter hlasitosti pod všetkým
             self.draw_meter(rms)
 
             pygame.display.flip()
+
         self.player.stop()
         pygame.quit()
+
 
 
 if __name__ == '__main__':
