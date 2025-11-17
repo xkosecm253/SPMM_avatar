@@ -51,8 +51,8 @@ RMS_METER_CLAMP = 0.12
 
 # TTS
 ESPEAK_VOICE_SK = 'sk+f3'
-ESPEAK_VOICE_EN = 'en+f3'
-ESPEAK_WPM = 170
+ESPEAK_VOICE_EN = 'en+m7'
+ESPEAK_WPM = 120
 
 # Layout
 LEFT_W = 480            # ľavý panel = avatar
@@ -62,6 +62,9 @@ GAP = 10;
 CTRL_H = 44;
 SMALL_H = 18
 
+# Layout – pridaj toto niekde nad App triedu (napr. pod WINDOW_H)
+LEFT_X  = PAD
+RIGHT_X = LEFT_W + PAD
 
 # ----------------------------- Načítanie a ukladanie configu pre tému -----------------------------
 def load_config():
@@ -153,30 +156,35 @@ SURP_WORDS = ['čože', 'coze', 'wow', 'neverím', 'neverim', 'vážne', 'vazne'
 _word_re = re.compile(r"[\wáäčďéíľĺňóôŕřšťúýž]+", re.IGNORECASE)
 
 
+# 1. Emočné okná – presne na slovo + krátky "dozvuk"
 def find_emotion_windows(text: str) -> List[Tuple[float, float, str]]:
     t = text.lower()
     tokens = _word_re.findall(t)
     if not tokens:
         return []
 
-    total = len(tokens)
+    total_words = len(tokens)
     windows = []
 
-    for i, w in enumerate(tokens):
-        pct = i / total
-        word_clean = w.replace(' ', '')
+    for i, word in enumerate(tokens):
+        word_clean = word.replace(',', '').replace('.', '').replace('!', '').replace('?', '')
+        position = i / total_words                     # kde v reči je slovo (0.0 – 1.0)
 
-        # Najprv skontroluj Happy
-        if any(k.replace(' ', '') in word_clean for k in POS_WORDS):
-            start = max(0.0, pct - 0.12)
-            end = min(1.0, pct + 0.12)
-            windows.append((start, end, 'Happy'))
+        emo = None
+        duration = 0.22  # koľko sekúnd trvá emócia po slove (uprav podľa potreby)
 
-        # Potom Surprised (prepisuje Happy len ak je v tom istom slove)
-        if any(k.replace(' ', '') in word_clean for k in SURP_WORDS):
-            start = max(0.0, pct - 0.12)
-            end = min(1.0, pct + 0.12)
-            windows.append((start, end, 'Surprised'))
+        # Surprised má prednosť
+        if any(k in word_clean for k in ["wow", "čože", "coze", "fíha", "fiha", "vážne", "vazne", "neverím", "neverim", "prekvap", "!?"]):
+            emo = "Surprised"
+            duration = 0.35  # prekvapenie trvá dlhšie (viac dramatické)
+
+        elif any(k in word_clean for k in ["teším sa", "tesim sa", "super", "skvelé", "paráda", "parada", "milujem", "rád", "rad", "jéé", "jupí", "hurá"]):
+            emo = "Happy"
+
+        if emo:
+            start = position
+            end   = min(1.0, position + duration)
+            windows.append((start, end, emo))
 
     return windows
 
@@ -286,301 +294,277 @@ class Dropdown:
 
 # ----------------------------- TextBox s výberom -----------------------------
 # ----------------------------- TextBox s výberom -----------------------------
-class TextBox:
-    def __init__(self, rect, text=''):
+# ============================== MULTILINE TEXTBOX (ako Word) ==============================
+# ============================== MULTILINE TEXTBOX – FINÁLNA VERZIA (ako Word) ==============================
+class MultiLineTextBox:
+    def __init__(self, rect, font, text='', placeholder='Napíš text…'):
         self.rect = pygame.Rect(rect)
+        self.font = font
         self.text = text
+        self.placeholder = placeholder
         self.active = False
         self.caret = len(text)
-        self.select_start = None  # <--- ZMENENÉ: None, nie caret
-        self.scroll_x = 0
-        self.scroll_y = 0              # <--- nové: vertikálny posun
-        self._blink_t = time.time()
-        self._blink_on = True
+        self.select_start = None
+        self.scroll_y = 0
+        self.blink_timer = 0
+        self.dragging_scroll = False
 
-        # nové pre viacriadkový režim
-        self.line_height = 26
-        self.max_lines = 3
-        self.padding = 10
-
-    def _wrap_text(self, font, width):
-        """Rozdelí text na riadky podľa šírky."""
+    def _get_lines(self):
+        max_w = self.rect.width - 40
         words = self.text.split(' ')
-        lines, line = [], ''
-        for w in words:
-            test_line = (line + ' ' + w).strip()
-            if font.size(test_line)[0] > width and line:
-                lines.append(line)
-                line = w
+        lines = []
+        cur = []
+        for word in words:
+            test = (' '.join(cur) + ' ' + word).strip() if cur else word
+            if self.font.size(test)[0] <= max_w:
+                cur.append(word)
             else:
-                line = test_line
-        if line:
-            lines.append(line)
+                if cur:
+                    lines.append(' '.join(cur))
+                    cur = [word]
+                else:
+                    # rozbijeme extrémne dlhé slovo
+                    while word:
+                        for i in range(len(word), 0, -1):
+                            if self.font.size(word[:i])[0] <= max_w:
+                                lines.append(word[:i])
+                                word = word[i:]
+                                break
+                        else:
+                            lines.append(word)
+                            word = ''
+                    cur = []
+        if cur:
+            lines.append(' '.join(cur))
         return lines
 
-    def _get_selection(self):
-        if self.select_start is None or self.select_start == self.caret:
-            return None, None
-        start = min(self.caret, self.select_start)
-        end = max(self.caret, self.select_start)
-        return start, end
+    def _char_to_pos(self, char_idx):
+        lines = self._get_lines()
+        pos = 0
+        for row, line in enumerate(lines):
+            if pos + len(line) >= char_idx:
+                return row, char_idx - pos
+            pos += len(line) + 1
+        return len(lines) - 1, len(lines[-1]) if lines else 0
 
-    def _ensure_caret_visible(self, font):
-        if not self.text:
-            self.scroll_x = 0
-            return
-        pad = 10
-        box_w = self.rect.width - 2 * pad
-        caret_px = font.size(self.text[:self.caret])[0]
-        if caret_px - self.scroll_x > box_w:
-            self.scroll_x = caret_px - box_w
-        elif caret_px - self.scroll_x < 0:
-            self.scroll_x = caret_px
-        if self.scroll_x < 0:
-            self.scroll_x = 0
+    def _pos_to_char(self, row, col):
+        lines = self._get_lines()
+        pos = 0
+        for r, line in enumerate(lines):
+            if r == row:
+                return min(pos + col, pos + len(line))
+            pos += len(line) + 1
+        return len(self.text)
 
-    def _draw_selection(self, surf, font, box):
-        start, end = self._get_selection()
-        if start is None or start == end:
-            return
-        x1 = font.size(self.text[:start])[0]
-        x2 = font.size(self.text[:end])[0]
-        sel_rect = pygame.Rect(
-            box.x - self.scroll_x + x1,
-            box.y,
-            x2 - x1,
-            font.get_height()
-        )
-        pygame.draw.rect(surf, (100, 150, 255, 100), sel_rect, border_radius=2)
+    def handle(self, event):
+        # Aktivácia po kliknutí kdekoľvek do poľa
+        if event.type == pygame.MOUSEBUTTONDOWN and self.rect.collidepoint(event.pos):
+            self.active = True
+            self.blink_timer = time.time()
 
-    """def draw(self, surf, font, placeholder='Napíš text…'):
-        pygame.draw.rect(surf, CARD, self.rect, border_radius=8)
-        pygame.draw.rect(surf, ACC if self.active else (70, 70, 80),
-                         self.rect, width=2, border_radius=8)
-        pad = 10
-        box = pygame.Rect(self.rect.x + pad, self.rect.y + pad,
-                          self.rect.width - 2*pad, self.rect.height - 2*pad)
+            # Scrollbar drag
+            lines = self._get_lines()
+            line_h = self.font.get_height()
+            total_h = len(lines) * line_h + 10
+            inner = self.rect.inflate(-20, -20); inner.y += 10; inner.height -= 20
+            if total_h > inner.height:
+                max_s = total_h - inner.height
+                bar_h = max(20, int(inner.height * inner.height / total_h))
+                bar_y = inner.y + (self.scroll_y / max_s * (inner.height - bar_h)) if max_s > 0 else inner.y
+                bar_rect = pygame.Rect(inner.right + 5, bar_y, 8, bar_h)
+                if bar_rect.collidepoint(event.pos):
+                    self.dragging_scroll = True
+                    return
 
-        self._draw_selection(surf, font, box)
+            # Kliknutie do textu
+            mx, my = event.pos
+            rel_y = my - inner.y + self.scroll_y
+            row = int(rel_y // line_h)
+            row = max(0, min(row, len(lines)-1))
+            line = lines[row]
+            x = 0
+            col = 0
+            for i, ch in enumerate(line + ' '):
+                if inner.x + self.font.size(line[:i])[0] >= mx:
+                    col = i
+                    break
+            idx = self._pos_to_char(row, col)
 
-        txt = self.text if self.text else placeholder
-        color = TXT if self.text else MUTED
-        text_surf = font.render(txt, True, color)
-        surf.set_clip(box)
-        surf.blit(text_surf, (box.x - self.scroll_x, box.y))
-        surf.set_clip(None)
-
-        if self.active:
-            now = time.time()
-            if now - self._blink_t > 0.5:
-                self._blink_on = not self._blink_on
-                self._blink_t = now
-            if self._blink_on:
-                caret_px = font.size(self.text[:self.caret])[0]
-                cx = box.x - self.scroll_x + caret_px
-                cy1 = box.y
-                cy2 = box.y + font.get_height()
-                pygame.draw.line(surf, ACC, (cx, cy1), (cx, cy2), 2)
-    """
-
-    def draw(self, surf, font, placeholder='Napíš text…'):
-        pygame.draw.rect(surf, CARD, self.rect, border_radius=8)
-        pygame.draw.rect(surf, ACC if self.active else (70, 70, 80),
-                         self.rect, width=2, border_radius=8)
-
-        pad = self.padding
-        box = pygame.Rect(self.rect.x + pad, self.rect.y + pad,
-                          self.rect.width - 2 * pad, self.rect.height - 2 * pad)
-
-        # vykreslenie textu s automatickým zalomením
-        text_lines = self._wrap_text(font, box.width)
-        visible_lines = text_lines[int(self.scroll_y / self.line_height):]
-        visible_lines = visible_lines[:self.max_lines]
-
-        color = TXT if self.text else MUTED
-        if not self.text:
-            text_lines = [placeholder]
-
-        surf.set_clip(box)
-        y = box.y - (self.scroll_y % self.line_height)
-        for line in visible_lines:
-            text_surf = font.render(line, True, color)
-            surf.blit(text_surf, (box.x, y))
-            y += self.line_height
-        surf.set_clip(None)
-
-        # automatická výška
-        total_h = min(len(text_lines), self.max_lines) * self.line_height + 2 * pad
-        self.rect.height = total_h
-
-        # caret (kurzor)
-        if self.active:
-            now = time.time()
-            if now - self._blink_t > 0.5:
-                self._blink_on = not self._blink_on
-                self._blink_t = now
-            if self._blink_on:
-                caret_line = font.size(self.text[:self.caret])[0]
-                pygame.draw.line(surf, ACC, (box.x + caret_line, box.y + len(visible_lines)*self.line_height - 20),
-                                 (box.x + caret_line, box.y + len(visible_lines)*self.line_height - 2), 2)
-
-    def handle(self, event, font=None):
-        if event.type == pygame.MOUSEBUTTONDOWN:
-            self.active = self.rect.collidepoint(event.pos)
-            if self.active and font:
-                pad = 10
-                rel_x = event.pos[0] - (self.rect.x + pad) + self.scroll_x
-                idx = 0
-                for i in range(len(self.text) + 1):
-                    if i > 0 and font.size(self.text[:i])[0] >= rel_x:
-                        idx = i
-                        break
-                else:
-                    idx = len(self.text)
-                if pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                    if self.select_start is None:
-                        self.select_start = self.caret
-                else:
-                    self.select_start = None
+            if pygame.key.get_mods() & pygame.KMOD_SHIFT and self.select_start is not None:
                 self.caret = idx
-                self._ensure_caret_visible(font)
-                self._blink_t = time.time()
-                self._blink_on = True
             else:
-                self.select_start = None
+                self.select_start = idx
+                self.caret = idx
 
-        if not self.active or event.type != pygame.KEYDOWN or not font:
-            return
+        elif event.type == pygame.MOUSEBUTTONUP:
+            self.dragging_scroll = False
 
-        mods = pygame.key.get_mods()
+        elif event.type == pygame.MOUSEMOTION and self.dragging_scroll:
+            lines = self._get_lines()
+            line_h = self.font.get_height()
+            total_h = len(lines) * line_h + 10
+            inner = self.rect.inflate(-20, -20); inner.y += 10; inner.height -= 20
+            if total_h > inner.height:
+                max_s = total_h - inner.height
+                bar_h = max(20, int(inner.height * inner.height / total_h))
+                rel_y = event.pos[1] - inner.y
+                ratio = rel_y / (inner.height - bar_h)
+                self.scroll_y = max(0, min(int(ratio * max_s), max_s))
 
-        # Ctrl+A
-        if event.key == pygame.K_a and (mods & pygame.KMOD_CTRL):
-            self.select_start = 0
-            self.caret = len(self.text)
-            self._ensure_caret_visible(font)
-            return
+        # Koliesko myši (funguje aj keď nie je aktívny focus)
+        elif event.type == pygame.MOUSEWHEEL and self.rect.collidepoint(pygame.mouse.get_pos()):
+            self.scroll_y -= event.y * 30
+            self.scroll_y = max(0, self.scroll_y)
 
-        # Ctrl+C / V / X
-        if event.key == pygame.K_c and (mods & pygame.KMOD_CTRL):
-            start, end = self._get_selection()
-            if start is not None and start != end:
-                pyperclip.copy(self.text[start:end])
-            return
-        if event.key == pygame.K_v and (mods & pygame.KMOD_CTRL):
-            clip = pyperclip.paste()
-            if clip:
-                start, end = self._get_selection()
-                if start is not None:
-                    self.text = self.text[:start] + clip + self.text[end:]
-                    self.caret = start + len(clip)
-                    self.select_start = None
-                else:
-                    self.text = self.text[:self.caret] + clip + self.text[self.caret:]
-                    self.caret += len(clip)
-                self._ensure_caret_visible(font)
-            return
-        if event.key == pygame.K_x and (mods & pygame.KMOD_CTRL):
-            start, end = self._get_selection()
-            if start is not None and start != end:
-                pyperclip.copy(self.text[start:end])
-                self.text = self.text[:start] + self.text[end:]
-                self.caret = start
-                self.select_start = None
-                self._ensure_caret_visible(font)
+        if not self.active:
             return
 
-        # Backspace / Delete
-        if event.key == pygame.K_BACKSPACE:
-            start, end = self._get_selection()
-            if start is not None and start != end:
-                self.text = self.text[:start] + self.text[end:]
-                self.caret = start
-                self.select_start = None
-            elif self.caret > 0:
-                self.text = self.text[:self.caret - 1] + self.text[self.caret:]
-                self.caret -= 1
-            self._ensure_caret_visible(font)
-            return
-        if event.key == pygame.K_DELETE:
-            start, end = self._get_selection()
-            if start is not None and start != end:
-                self.text = self.text[:start] + self.text[end:]
-                self.caret = start
-                self.select_start = None
-            elif self.caret < len(self.text):
-                self.text = self.text[:self.caret] + self.text[self.caret + 1:]
-            self._ensure_caret_visible(font)
-            return
+        if event.type == pygame.KEYDOWN:
+            self.blink_timer = time.time()
 
-        # Šípky
-        if event.key == pygame.K_LEFT:
-            if mods & pygame.KMOD_SHIFT:
-                if self.select_start is None:
-                    self.select_start = self.caret
-                self.caret = max(0, self.caret - 1)
-            else:
-                if self.select_start is not None:
-                    self.caret = min(self.caret, self.select_start)
-                    self.select_start = None
-                else:
-                    self.caret = max(0, self.caret - 1)
-            self._ensure_caret_visible(font)
-            return
-        if event.key == pygame.K_RIGHT:
-            if mods & pygame.KMOD_SHIFT:
-                if self.select_start is None:
-                    self.select_start = self.caret
-                self.caret = min(len(self.text), self.caret + 1)
-            else:
-                if self.select_start is not None:
-                    self.caret = max(self.caret, self.select_start)
-                    self.select_start = None
-                else:
-                    self.caret = min(len(self.text), self.caret + 1)
-            self._ensure_caret_visible(font)
-            return
-        if event.key == pygame.K_HOME:
-            if mods & pygame.KMOD_SHIFT:
-                if self.select_start is None:
-                    self.select_start = self.caret
-                self.caret = 0
-            else:
-                self.caret = 0
-                self.select_start = None
-            self._ensure_caret_visible(font)
-            return
-        if event.key == pygame.K_END:
-            if mods & pygame.KMOD_SHIFT:
-                if self.select_start is None:
-                    self.select_start = self.caret
+            # Ctrl+A, Ctrl+C, Ctrl+V
+            if event.key == pygame.K_a and event.mod & pygame.KMOD_CTRL:
+                self.select_start = 0
                 self.caret = len(self.text)
-            else:
-                self.caret = len(self.text)
+            elif event.key == pygame.K_c and event.mod & pygame.KMOD_CTRL:
+                if self.select_start is not None:
+                    s, e = sorted([self.select_start, self.caret])
+                    pyperclip.copy(self.text[s:e])
+            elif event.key == pygame.K_v and event.mod & pygame.KMOD_CTRL:
+                paste = pyperclip.paste()
+                s = e = self.caret
+                if self.select_start is not None:
+                    s, e = sorted([self.select_start, self.caret])
+                self.text = self.text[:s] + paste + self.text[e:]
+                self.caret = s + len(paste)
                 self.select_start = None
-            self._ensure_caret_visible(font)
-            return
 
-        # Normálne písanie
-        if event.unicode:
-            start, end = self._get_selection()
-            if start is not None and start != end:
-                self.text = self.text[:start] + event.unicode + self.text[end:]
-                self.caret = start + 1
+            # Backspace / Delete
+            elif event.key == pygame.K_BACKSPACE:
+                if self.select_start is not None:
+                    s, e = sorted([self.select_start, self.caret])
+                    self.text = self.text[:s] + self.text[e:]
+                    self.caret = s
+                    self.select_start = None
+                elif self.caret > 0:
+                    self.text = self.text[:self.caret-1] + self.text[self.caret:]
+                    self.caret -= 1
+
+            elif event.key == pygame.K_DELETE:
+                if self.select_start is not None:
+                    s, e = sorted([self.select_start, self.caret])
+                    self.text = self.text[:s] + self.text[e:]
+                    self.caret = s
+                    self.select_start = None
+                elif self.caret < len(self.text):
+                    self.text = self.text[:self.caret] + self.text[self.caret+1:]
+
+            # Šípky – fungujú perfektne
+            elif event.key == pygame.K_LEFT:
+                if self.caret > 0: self.caret -= 1
+                if not (event.mod & pygame.KMOD_SHIFT): self.select_start = None
+            elif event.key == pygame.K_RIGHT:
+                if self.caret < len(self.text): self.caret += 1
+                if not (event.mod & pygame.KMOD_SHIFT): self.select_start = None
+            elif event.key == pygame.K_UP:
+                r, c = self._char_to_pos(self.caret)
+                if r > 0: self.caret = self._pos_to_char(r-1, c)
+                if not (event.mod & pygame.KMOD_SHIFT): self.select_start = None
+            elif event.key == pygame.K_DOWN:
+                r, c = self._char_to_pos(self.caret)
+                lines = self._get_lines()
+                if r < len(lines)-1: self.caret = self._pos_to_char(r+1, c)
+                if not (event.mod & pygame.KMOD_SHIFT): self.select_start = None
+
+            # Normálne písanie
+            elif event.unicode:
+                s = e = self.caret
+                if self.select_start is not None:
+                    s, e = sorted([self.select_start, self.caret])
+                self.text = self.text[:s] + event.unicode + self.text[e:]
+                self.caret = s + 1
                 self.select_start = None
+
+            # AUTOMATICKÉ SCROLLOVANIE NA KURZOR (najdôležitejšie!)
+            row, _ = self._char_to_pos(self.caret)
+            line_h = self.font.get_height()
+            cursor_y = row * line_h
+            inner = self.rect.inflate(-20, -20)
+            inner.y += 10; inner.height -= 20
+
+            if cursor_y - self.scroll_y > inner.height - line_h:
+                self.scroll_y = cursor_y - inner.height + line_h + 20
+            elif cursor_y - self.scroll_y < 0:
+                self.scroll_y = cursor_y
+
+            total_h = len(self._get_lines()) * line_h + 10
+            if total_h > inner.height:
+                max_s = total_h - inner.height
+                self.scroll_y = max(0, min(self.scroll_y, max_s))
             else:
-                self.text = self.text[:self.caret] + event.unicode + self.text[self.caret:]
-                self.caret += 1
-            self._ensure_caret_visible(font)
+                self.scroll_y = 0
 
-        self._blink_t = time.time()
-        self._blink_on = True
+    def draw(self, screen):
+        pygame.draw.rect(screen, CARD, self.rect, border_radius=12)
+        pygame.draw.rect(screen, ACC if self.active else (70, 70, 80), self.rect, width=2, border_radius=12)
 
-         # Scroll myšou
-        if event.type == pygame.MOUSEWHEEL and self.active:
-            total_lines = max(1, len(self._wrap_text(font, self.rect.width - 2*self.padding)))
-            max_scroll = max(0, (total_lines - self.max_lines) * self.line_height)
-            self.scroll_y = min(max(0, self.scroll_y - event.y * self.line_height), max_scroll)
+        inner = self.rect.inflate(-20, -20)
+        inner.y += 10
+        inner.height -= 20
+        screen.set_clip(inner)
+
+        # BG bude rovnaké ako CARD → žiadny rozdiel medzi vonkajšou a vnútornou farbou
+        bg = CARD
+
+        pygame.draw.rect(screen, bg, inner)
+
+        lines = self._get_lines()
+        line_h = self.font.get_height()
+        total_h = len(lines) * line_h + 10
+        if total_h > inner.height:
+            max_s = total_h - inner.height
+            self.scroll_y = max(0, min(self.scroll_y, max_s))
+        else:
+            self.scroll_y = 0
+
+        # Modrý výber (viditeľný text)
+        if self.select_start is not None:
+            s, e = sorted([self.select_start, self.caret])
+            pos = 0
+            for row, line in enumerate(lines):
+                start_char = max(pos, s) - pos
+                end_char = min(pos + len(line), e) - pos
+                if start_char < end_char:
+                    x = inner.x + self.font.size(line[:start_char])[0]
+                    w = self.font.size(line[start_char:end_char])[0]
+                    y = inner.y + row * line_h - self.scroll_y
+                    pygame.draw.rect(screen, (100, 160, 255, 180), (x, y, w, line_h))
+                pos += len(line) + 1
+
+        # Text + placeholder
+        for i, line in enumerate(lines):
+            y = inner.y + i * line_h - self.scroll_y
+            color = TXT if line else MUTED
+            text_to_draw = line if line else self.placeholder
+            screen.blit(self.font.render(text_to_draw, True, color), (inner.x, y))
+
+        # Blikajúci kurzor
+        if self.active and (time.time() - self.blink_timer < 10) and (time.time() % 1.0 < 0.5):
+            row, col = self._char_to_pos(self.caret)
+            if row < len(lines):
+                x = inner.x + self.font.size(lines[row][:col])[0]
+                y = inner.y + row * line_h - self.scroll_y
+                pygame.draw.line(screen, ACC, (x, y), (x, y + line_h - 4), 2)
+
+        screen.set_clip(None)
+
+        # Scrollbar
+        if total_h > inner.height:
+            bar_h = max(20, int(inner.height * inner.height / total_h))
+            bar_y = inner.y + (self.scroll_y / max_s * (inner.height - bar_h)) if max_s > 0 else inner.y
+            bar = pygame.Rect(inner.right + 5, bar_y, 8, bar_h)
+            pygame.draw.rect(screen, (100,100,120), bar, border_radius=4)
+            pygame.draw.rect(screen, (150,150,170), bar, width=1, border_radius=4)
 
 # ----------------------------- Avatar -----------------------------
 class Avatar:
@@ -731,9 +715,12 @@ class App:
         )
         y += 50
 
-        # Textové pole so scrollom
-        self.box = TextBox((LEFT_W + pad, y, RIGHT_W - 2 * pad, 120))
-        y += 120 + 20
+        # Namiesto starého TextBox
+        self.box = MultiLineTextBox(
+            rect=(0, 0, 100, 100),  # veľkosť sa prepíše v run()
+            font=self.font,
+            placeholder='Napíš text…'
+        )
 
         # Tlačidlá Speak / Stop
         half = (RIGHT_W - 3 * pad) // 2
@@ -774,6 +761,8 @@ class App:
 
     def on_stop(self):
         self.player.stop()
+        self.speech_end_time = None  # ← toto pridaj
+        self.last_active_emo = "Neutral"
 
     def draw_meter(self, rms: float):
         v = min(rms / RMS_METER_CLAMP, 1.0)
@@ -784,37 +773,48 @@ class App:
         pygame.draw.rect(self.screen, (55, 58, 66), (x, y, w, h), border_radius=4)
         pygame.draw.rect(self.screen, ACC, (x, y + h - int(h * v), w, int(h * v)), border_radius=4)
 
+    # 2. Ktorá emócia je práve aktívna – presne podľa času
     def current_emotion(self) -> str:
-        if not self.player.playing:
-            return getattr(self, 'last_emotion', self.base_emo)
+        # Ak práve hrá reč
+        if self.player.playing:
+            progress = self.player.progress()
+            active_emo = self.base_emo
 
-        p = self.player.progress()
-        active_emo = self.base_emo
-
-        # Nájdi najneskôr začínajúce okno, ktoré ešte platí
-        for start, end, emo in self.emotion_windows:
-            if p >= start:  # okno už začalo
-                if p <= end:  # ešte beží
+            # Nájdi aktuálne emočné okno
+            for start, end, emo in self.emotion_windows:
+                if start <= progress <= end:
                     active_emo = emo
-                else:
-                    # okno skončilo, ale ešte nepríde nové → drž poslednú
-                    if active_emo == self.base_emo:
-                        active_emo = emo
-            # else: okno ešte nezačalo → ignoruj
+                    break
 
-        self.last_emotion = active_emo
-        return active_emo
+            # Zapamätaj si poslednú emóciu a čas, kedy skončila reč
+            self.last_active_emo = active_emo
+            self.speech_end_time = None  # reč stále beží
+            return active_emo
+
+        # Ak reč skončila
+        else:
+            # Ak sme prvýkrát skončili → zapamätaj čas
+            if not hasattr(self, 'speech_end_time') or self.speech_end_time is None:
+                self.speech_end_time = time.time()
+
+            # Po 2.5 sekundách od skončenia reči → vráť sa na Neutral
+            if time.time() - self.speech_end_time > 2.5:
+                return "Neutral"
+            else:
+                # Inak drž poslednú emóciu ešte chvíľu
+                return getattr(self, "last_active_emo", "Neutral")
 
     def run(self):
         clock = pygame.time.Clock()
         running = True
-        dt = 0.0  # pre idle animáciu
+        dt = 0.0
 
-        # Fixná šírka pravej strany (UI)
-        RIGHT_W = 400
-        RIGHT_X = WINDOW_W - RIGHT_W - 20  # pravá strana s marginom
-        LEFT_X = 20  # ľavá strana pre avatar
-        LEFT_W = RIGHT_X - LEFT_X  # zvyšná šírka pre avatar
+        # Trvalé rozloženie
+        PAD = 24
+        RIGHT_W = 440
+        RIGHT_X = WINDOW_W - RIGHT_W - PAD
+        LEFT_W = RIGHT_X - PAD * 2
+        LEFT_X = PAD
 
         while running:
             dt = clock.tick(60) / 1000.0
@@ -823,81 +823,99 @@ class App:
                     running = False
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_RETURN and self.box.active:
                     self.on_speak()
-                self.box.handle(event, self.font)
+
+                self.box.handle(event)
                 self.btn_speak.handle(event)
                 self.btn_stop.handle(event)
                 self.tgl_lang.handle(event)
                 self.btn_theme.handle(event)
 
-            # === Pozadie ===
             self.screen.fill(BG)
 
-            # === ĽAVÝ PANEL – AVATAR ===
-            avatar_h = 420
-            avatar_rect = pygame.Rect(LEFT_X, 40, LEFT_W, avatar_h)
-            pygame.draw.rect(self.screen, CARD, avatar_rect, border_radius=12)
-            pygame.draw.rect(self.screen, (70, 70, 80), avatar_rect, width=2, border_radius=12)
+            # Ľavý panel – Naruto
+            avatar_rect = pygame.Rect(LEFT_X, 40, LEFT_W, WINDOW_H - 80)
+            pygame.draw.rect(self.screen, CARD, avatar_rect, border_radius=20)
+            pygame.draw.rect(self.screen, (60, 60, 80), avatar_rect, width=3, border_radius=20)
 
+            # Lip-sync a emócie
             rms = self.player.current_rms()
             state = "closed"
-            if rms < RMS_THR1:
-                state = "closed"
-            elif rms < RMS_THR2:
-                state = "teeth"
-            elif rms < RMS_THR3:
-                state = "open"
-            else:
+            if rms > RMS_THR4:
                 state = "o"
+            elif rms > RMS_THR3:
+                state = "open"
+            elif rms > RMS_THR2:
+                state = "teeth"
             emo = self.current_emotion()
+            if emo == "Happy" and rms < RMS_THR2: state = "smile"
             self.avatar.set_emotion(emo)
-            if emo == "Happy" and rms < RMS_THR2:
-                state = "smile"
             self.avatar.set_mouth(state)
-
             self.avatar.update_idle(dt)
+            self.avatar.draw_scaled(self.screen, avatar_rect.inflate(-40, -40))
 
-            inner = avatar_rect.inflate(-16, -16)
-            self.avatar.draw_scaled(self.screen, inner)
+            # --- Postupný návrat na Neutral po skončení reči ---
+            if not self.player.playing and hasattr(self, 'last_emotion') and self.last_emotion != 'Neutral':
+                if not hasattr(self, 'neutral_timer'):
+                    self.neutral_timer = time.time()
+                elif time.time() - self.neutral_timer > 2.0:
+                    self.last_emotion = 'Neutral'
+                    del self.neutral_timer
+            else:
+                if hasattr(self, 'neutral_timer'):
+                    del self.neutral_timer
 
-            # === PRAVÝ PANEL – UI ===
-            pygame.draw.rect(self.screen, PANEL, pygame.Rect(RIGHT_X, 40, RIGHT_W, WINDOW_H - 80))
+            y = 36
 
-            spacing = 20
-            current_y = 60  # začiatok zhora pre UI prvky
+            # Téma – úplne zarovno s textovým poľom
+            box_x = RIGHT_X + 20
+            box_w = RIGHT_W - 40
 
-            # Prepínač témy hore
-            self.btn_theme.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, 36)
+            self.btn_theme.rect = pygame.Rect(box_x, y, box_w, 40)
             self.btn_theme.draw(self.screen, self.font_s)
-            current_y += 36 + spacing
+            y += 76
 
-            # Textové pole so scrollom
-            self.box.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, 150)
-            self.box.draw(self.screen, self.font)
-            current_y += 150 + spacing
+            # Textové pole
+            box_h = 256
+            self.box.rect = pygame.Rect(RIGHT_X + 20, y, RIGHT_W - 40, box_h)
+            self.box.draw(self.screen)
+            y += box_h + 28
 
-            # Tlačidlá Speak / Stop vedľa seba
-            btn_h = 44
-            btn_gap = 12
-            btn_w = (RIGHT_W - 20 - btn_gap) // 2
-            self.btn_speak.rect = pygame.Rect(RIGHT_X + 10, current_y, btn_w, btn_h)
-            self.btn_stop.rect = pygame.Rect(RIGHT_X + 10 + btn_w + btn_gap, current_y, btn_w, btn_h)
-            self.btn_speak.draw(self.screen, self.font)
-            self.btn_stop.draw(self.screen, self.font)
-            current_y += btn_h + spacing
+            # Speak + Stop – ploché, bez pozadia
+            btn_w = (RIGHT_W - 60) // 2
+            self.btn_speak.rect = pygame.Rect(RIGHT_X + 20, y, btn_w, 52)
+            self.btn_stop.rect = pygame.Rect(RIGHT_X + 20 + btn_w + 20, y, btn_w, 52)
 
-            # Prepínač jazyka
-            toggle_h = 50
-            self.tgl_lang.rect = pygame.Rect(RIGHT_X + 10, current_y, RIGHT_W - 20, toggle_h)
+            # Oprav tlačidlá – nech nemajú svetlé pozadie!
+            def draw_clean_button(btn):
+                color = ACC if btn.rect.collidepoint(pygame.mouse.get_pos()) else (80, 80, 100)
+                pygame.draw.rect(self.screen, color, btn.rect, border_radius=12)
+                pygame.draw.rect(self.screen, ACC, btn.rect, width=2, border_radius=12)
+                txt = self.font.render(btn.label, True, TXT)
+                self.screen.blit(txt, txt.get_rect(center=btn.rect.center))
+
+            draw_clean_button(self.btn_speak)
+            draw_clean_button(self.btn_stop)
+            y += 70
+
+            # Jazyk
+            self.tgl_lang.rect = pygame.Rect(RIGHT_X + 20, y, RIGHT_W - 40, 66)
             self.tgl_lang.draw(self.screen, self.font, self.font_s)
 
-            # Meter hlasitosti pod všetkým
-            self.draw_meter(rms)
-
+            # Meter hlasitosti – vždy viditeľný
+            mx = RIGHT_X + RIGHT_W - 508
+            my = WINDOW_H - 560
+            fill_h = int(110 * min(rms / RMS_METER_CLAMP, 1.0)) if self.player.playing else 0
+            # Pozadie (vždy vidno)
+            pygame.draw.rect(self.screen, (50, 50, 70), (mx, my, 16, 110), border_radius=8)
+            # Výplň (iba keď hrá)
+            if fill_h > 0:
+                pygame.draw.rect(self.screen, ACC, (mx, my + 110 - fill_h, 16, fill_h), border_radius=8)
+                # Rámik
+            pygame.draw.rect(self.screen, (100, 100, 140), (mx, my, 16, 110), width=2, border_radius=8)
             pygame.display.flip()
 
         self.player.stop()
         pygame.quit()
-
 
 
 if __name__ == '__main__':
