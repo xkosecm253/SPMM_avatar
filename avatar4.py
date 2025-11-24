@@ -954,8 +954,13 @@ class App:
             self.btn_stop.rect = pygame.Rect(RIGHT_X_LOC + 20 + btn_w + 20, y, btn_w, 52)
 
             def draw_clean_button(btn):
-                color = ACC if btn.rect.collidepoint(pygame.mouse.get_pos()) else (80, 80, 100)
-                pygame.draw.rect(self.screen, color, btn.rect, border_radius=12)
+                # Biele tlačidlá v light móde, tmavé v dark móde
+                if CONFIG['theme'] == 'light':
+                    bg_color = (255, 255, 255) if not btn.rect.collidepoint(pygame.mouse.get_pos()) else ACC
+                else:
+                    bg_color = (80, 80, 100) if not btn.rect.collidepoint(pygame.mouse.get_pos()) else ACC
+
+                pygame.draw.rect(self.screen, bg_color, btn.rect, border_radius=12)
                 pygame.draw.rect(self.screen, ACC, btn.rect, width=2, border_radius=12)
                 txt = self.font.render(btn.label, True, TXT)
                 self.screen.blit(txt, txt.get_rect(center=btn.rect.center))
