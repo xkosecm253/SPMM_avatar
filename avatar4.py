@@ -234,11 +234,37 @@ def wav_rms_timeline(path: str, frame_ms: int = FRAME_MS) -> Tuple[List[float], 
 
 # ----------------------------- Text → Emócia -----------------------------
 POS_WORDS = [
-    'teším sa', 'tesim sa', 'veľmi rád', 'velmi rad', 'super', 'skvel', 'paráda', 'parada', 'radosť',
-    'mam rad', 'mám rád', 'milujem', 'great', 'awesome', 'happy', 'glad', 'love'
-]
-SURP_WORDS = ['čože', 'coze', 'wow', 'neverím', 'neverim', 'vážne', 'vazne', 'fíha', 'fiha', 'prekvap', '?!', '!?']
+    # Slovenčina
+    'teším sa', 'tesim sa', 'už sa teším', 'nemôžem sa dočkať', 'super', 'super!', 'skvelé', 'skvele', 'skvely',
+    'paráda', 'parada', ' paráda', 'úžasné', 'uzasne', 'úžasne', 'bomba', 'luxus', 'top', 'topka', 'perfektne',
+    'výborne', 'vyborne', 'jéé', 'jéj', 'jupí', 'hurá', 'juchú', 'yeah', 'yes', 'jo', 'joj', 'milujem to',
+    'mám rád', 'mam rad', 'mám rada', 'obľubujem', 'oblubujem', 'krasne', 'krásne', 'nádhera', 'nádherné',
+    'milujem', 'zbožňujem', 'zboznujem', 'lol', 'haha', 'hehe', 'xd', 'xddd', '😂', '🤣', '😄', '😁', '😊',
+    '😍', '🥰', '💕', '❤️', '🧡', '💛', '💚', '💙', '💜', '😎', '🔥', '🎉', '🥳', '🎊', '👍', '👌',
 
+    # Angličtina + univerzálne
+    'great', 'awesome', 'amazing', 'fantastic', 'wonderful', 'excellent', 'perfect', 'love it', 'loving it',
+    'so good', 'nice', 'cool', 'epic', 'brilliant', 'happy', 'glad', 'joy', 'yay', 'woo', 'woohoo', 'yess',
+    'yes!', 'hell yeah', 'fuck yeah', 'omg yes', 'so happy', 'made my day', 'best', 'the best', 'lit', 'fire'
+]
+
+# SURPRISED / PREKVAPENÁ / ŠOKOVANÁ EMÓCIA
+SURP_WORDS = [
+    # Slovenčina
+    'čože', 'coze', 'čože?', 'coze?', 'čo?', 'čože!', 'naozaj', 'naozaj?', 'vážne', 'vazne', 'vážne?', 'vazne?',
+    'fíha', 'fiha', 'fíha', 'wow', 'wau', 'ježiš', 'ježišmarjá', 'ježiškriste', 'panebože', 'bože', 'božemôj',
+    'neverím', 'neverim', 'neviem uveriť', 'to snáď nie', 'to nesmie byť pravda', 'prekvapenie', 'šok', 'šokujúce',
+    'what', 'wtf', 'wtf?', 'seriózne', 'seriozne', 'fakt', 'fakt?', 'dobre?', 'dobre!', 'no ty kokos', 'no ty kokso',
+    'to sa nedá', 'to je možné', 'to je možné?', 'jakživ', 'jak živ', 'to som nečakal', 'to som necekal',
+    '😱', '😲', '😳', '🤯', '🤨', '😮', '😯', '🫢', '🫣', '👀', '‼️', '⁉️', '❗', '❓', '‼️', '🔥', '💥',
+
+    # Angličtina + univerzálne
+    'wow', 'omg', 'omfg', 'oh my god', 'holy shit', 'what the fuck', 'wtf', 'seriously', 'seriously?',
+    'no way', 'no fucking way', 'are you serious', 'you kidding', 'you kidding me', 'really', 'really?',
+    'for real', 'wait what', 'hold on', 'excuse me', 'come again', 'say what', 'unbelievable', 'insane',
+    'crazy', 'mind blown', 'shocked', 'speechless', 'damn', 'holy', 'jesus', 'christ', 'what the hell',
+    'what the actual fuck', 'noooo', 'nooooo', 'wait', 'hold up', 'bruh', 'bro', 'dude', 'what?!', '?!'
+]
 _word_re = re.compile(r"[\wáäčďéíľĺňóôŕřšťúýž]+", re.IGNORECASE)
 
 
